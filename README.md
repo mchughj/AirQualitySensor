@@ -56,37 +56,47 @@ The PMS5003 sensor used here has a datasheet which can be found here:
 
 There are these data elements:
 
-1/  PM1.0 μg/m3 - CF=1
-2/  PM2.5 μg/m3 - CF=1
-3/  PM10  μg/m3 - CF=1
+1.  PM1.0 μg/m3 - CF=1
+2. PM2.5 μg/m3 - CF=1
+3. PM10  μg/m3 - CF=1
 
-4/  PM1.0 μg/m3 - CF=atm
-5/  PM2.5 μg/m3 - CF=atm
-6/  PM10  μg/m3 - CF=atm
+4. PM1.0 μg/m3 - CF=atm
+5. PM2.5 μg/m3 - CF=atm
+6. PM10  μg/m3 - CF=atm
 
-7/  Particle count beyond 0.3 microns in 0.1L of air
-8/  Particle count beyond 0.5 microns in 0.1L of air
-9/  Particle count beyond 1.0 microns in 0.1L of air
-10/ Particle count beyond 2.5 microns in 0.1L of air
-11/ Particle count beyond 5.0 microns in 0.1L of air
-12/ Particle count beyond 10  microns in 0.1L of air
+7. Particle count beyond 0.3 microns in 0.1L of air
+8. Particle count beyond 0.5 microns in 0.1L of air
+9. Particle count beyond 1.0 microns in 0.1L of air
+10. Particle count beyond 2.5 microns in 0.1L of air
+11. Particle count beyond 5.0 microns in 0.1L of air
+12. Particle count beyond 10  microns in 0.1L of air
 
 ### What is up with CF?
 
-The CF = 1 vs 'atm' is covered in this random article: https://www.mdpi.com/1424-8220/20/17/4796/html.  CF=1 is 'indoor' and 'atm' is outdoor.  (This link is a neat article about the use of the 5003 as a low-cost method of measuring wildfire smoke.  "Low-cost" is anything < $5,000!)
+The CF = 1 vs 'atm' is covered in this random article: https://www.mdpi.com/1424-8220/20/17/4796/html.  CF=1 is 'indoor' and 'atm' is outdoor.  This link is a neat article about the use of the 5003 as a low-cost method of measuring wildfire smoke.  "Low-cost" is anything < $5,000!
 
 I want to pay most attention to PM10 μg/m3 - CF=1 -- or data point #3.  
-It is μg/m3 and not mg/m3 so 0.6ppm == 600 μg/m3.  Anything above that is unsafe per safety standards.
+It is μg/m3 and not mg/m3 so for my environment 0.6ppm is considered unsafe.  0.6ppm == 600 μg/m3.  Anything above that is unsafe per safety standards.
 
 ### Power Supply
 
-"DC 5V power supply is needed because the FAN should be driven by 5V."  Operating at 3.3V the fan will turn more slowly and thus the results for ppm will be off since it is assuming that the fan is pulling air across the sensor at a specific rate.  
+Should I power the fan using 3.3V or 5V?  It appears to work for both although the numbers for 3.3V are a bit smaller.  From the datasheet:
+
+> DC 5V power supply is needed because the FAN should be driven by 5V.
+
+This confirmed that operating at 3.3V the fan will turn more slowly and thus the results for ppm will be off since it is assuming that the fan is pulling air across the sensor at a specific rate.  When possible use the USB (or 5V) power rail on the feather.
 
 ### Stability
 
-"Stable data should be got at least 30 seconds after the sensor wakeup from the sleep mode because of the fan’s performance."  Takes a bit for the fan to spin up and the data to normalize.
+> Stable data should be got at least 30 seconds after the sensor wakeup from the sleep mode because of the fan’s performance.
+ 
+Takes a bit for the fan to spin up and the data to normalize.
 
 ### Gotchas
 
-The shell is grounded - oh boy:  "Metal shell is connected to the GND so be careful not to let it shorted with the other parts of circuit except GND."  Don't let the shell touch the ESP8266 I guess.
+The shell for the PMS5003 is grounded - oh boy
+
+> Metal shell is connected to the GND so be careful not to let it shorted with the other parts of circuit except GND.
+ 
+Don't let the shell touch the ESP8266 I guess.
 
