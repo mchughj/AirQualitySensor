@@ -1,7 +1,16 @@
 # AirQualitySensor
-A project to track the harmful air quality found in my wood workshop.  
+I've become highly allergic to wood dust so this is part of my efforts to manage that.  This project tracks the harmful air quality found in my wood workshop.  
 
-## Generic Informationn
+This project utilizes an [Adafruit Feather Huzzah](https://www.adafruit.com/product/2821) along with a (small OLED display)[https://www.adafruit.com/product/2900].  To setup the feather Huzzah see (Adafruit's helpful guide)[https://learn.adafruit.com/adafruit-feather-huzzah-esp8266/using-arduino-ide].  The feather is connected to a (PMS5003)[https://www.adafruit.com/product/3686].
+
+Dependent embedded libraries can be found in dependency directory as zips.
+* PMS air quality client library - https://github.com/riverscn/pmsx003
+* WifiManager - https://github.com/tzapu/WiFiManager
+* AdaFruit GFX Library - https://github.com/adafruit/Adafruit-GFX-Library
+* AdaFruit SSD1306 Library - https://github.com/adafruit/Adafruit_SSD1306
+* PubSubClient for MQTT - https://github.com/knolleary/pubsubclient
+
+## Generic Information
 
 http://www.fwwa.org.au/Art005_WoodDust_c1.pdf
 
