@@ -1,1 +1,5 @@
 storage/air_qaulity.db
+*.swp
+*/restartService.sh
+*/showLogs.sh
+*/stopService.sh
