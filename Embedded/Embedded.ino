@@ -87,7 +87,8 @@ ESP8266WebServer server(80);
 
 // Approximate number of milliseconds to wait before fetching more
 // air quality readings.
-#define NEXT_READING_MILLIS 2000
+#define NEXT_READING_MILLIS    1000
+#define NEXT_PUBLISHING_MILLIS 10000
 
 PubSubClient mqtt_client;
 Adafruit_SSD1306 display = Adafruit_SSD1306(128, 32, &Wire);
@@ -202,7 +203,7 @@ void setup(void) {
   display.clearDisplay();
   display.setCursor(0,0);
   display.println("Connected to:");
-  display.println("  " + WiFi.localIP());
+  display.println(WiFi.localIP());
   display.printf("\nWarming up...");
   display.display();
 
@@ -237,9 +238,52 @@ void connect_mqtt() {
 
 bool isWarmup = true;
 long startMillis = millis();
-long lastReadMillis = millis();
 long nextReadMillis = millis();
+long nextMqttPublishMillis = millis();
+long lastMqttPublishMillis = millis();
+long timesRead = 0;
+long timesPublished = 0;
+
 const auto n = Pmsx003::Reserved;
+
+void potentially_report_pms_data(const Pmsx003::pmsData data[Pmsx003::Reserved]) {
+  if (millis() > nextMqttPublishMillis) { 
+    // Push data to MQTT if we are connected - otherwise attempt to reconnect.
+    if (!mqtt_client.connected()) {
+      connect_mqtt();
+    } else { 
+      char mqttMessage[100];
+
+      sprintf(mqttMessage, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+          data[Pmsx003::PM1dot0CF1 ],
+          data[Pmsx003::PM2dot5CF1],
+          data[Pmsx003::PM10dot0CF1],
+          data[Pmsx003::Particles0dot3],
+          data[Pmsx003::Particles0dot5],
+          data[Pmsx003::Particles1dot0],
+          data[Pmsx003::Particles2dot5],
+          data[Pmsx003::Particles5dot0],
+          data[Pmsx003::Particles10],
+          (int) (millis() - lastMqttPublishMillis)
+          );
+
+      mqtt_client.publish("aq", mqttMessage);
+      timesPublished++;
+      lastMqttPublishMillis = millis();
+    }
+    nextMqttPublishMillis += NEXT_PUBLISHING_MILLIS;
+  }
+}
+
+char getSingleGlyph(int value) { 
+  switch( value % 4) { 
+    case 0: return '-';
+    case 1: return '\\';
+    case 2: return '|';
+    case 3: return '/';
+  }
+  return '?';
+}
 
 void loop(void) {
 
@@ -248,7 +292,6 @@ void loop(void) {
   if (isWarmup) { 
     long elapsedMillis = millis() - startMillis;
     if (elapsedMillis > WARMUP_MILLIS) { 
-      lastReadMillis = millis();
       isWarmup = false;
     } 
     return;
@@ -264,6 +307,7 @@ void loop(void) {
 
     Pmsx003::pmsData data[n];
     Pmsx003::PmsStatus status = pms.read(data, n);
+    timesRead++;
 
     long dataFetchedMillis = millis();
 
@@ -279,47 +323,23 @@ void loop(void) {
           } else {
             display.println(" | BAD");
           }
-          display.println();
+        
+          // A single character glyph is useful to show when the data has been
+          // read and also published.  
+          char r = getSingleGlyph(timesRead);
+          char p = getSingleGlyph(timesPublished);
+          display.printf( "             [%c]  [%c]\n", r,p);
+
           display.printf( "%-5d %s\n", data[Pmsx003::PM1dot0CF1], shortNames[Pmsx003::PM1dot0CF1]);
           display.printf( "%-5d %s\n", data[Pmsx003::PM10dot0CF1], shortNames[Pmsx003::PM10dot0CF1]);
           display.display();
 
-          // Push data to MQTT
-          if (!mqtt_client.connected()) {
-            connect_mqtt();
-          } else { 
-            char mqttMessage[100];
-
-            sprintf(mqttMessage, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
-                data[Pmsx003::PM1dot0CF1 ],
-                data[Pmsx003::PM2dot5CF1],
-                data[Pmsx003::PM10dot0CF1],
-                data[Pmsx003::Particles0dot3],
-                data[Pmsx003::Particles0dot5],
-                data[Pmsx003::Particles1dot0],
-                data[Pmsx003::Particles2dot5],
-                data[Pmsx003::Particles5dot0],
-                data[Pmsx003::Particles10],
-                (int) (millis() - lastReadMillis)
-                );
-
-            mqtt_client.publish("aq", mqttMessage);
-          }
-
           nextReadMillis = millis();
           long elapsedMillis = millis() - startDataFetchMillis;
           if (elapsedMillis < NEXT_READING_MILLIS) { 
-#ifdef SHOW_TIME_ELAPSED
-            Serial.printf("Total Elapsed: %d, PMS read: %d, sleeping for: %d\n", 
-                elapsedMillis,
-                (dataFetchedMillis - startDataFetchMillis),
-                (NEXT_READING_MILLIS - elapsedMillis));
-#endif
-            // We want to delay a bit so that we aren't reading too quickly and 
-            // overwhelming the poor server receiving the MQTT messages.
             nextReadMillis += (NEXT_READING_MILLIS - elapsedMillis); 
           }
-          lastReadMillis = dataFetchedMillis;
+          potentially_report_pms_data(data);
           break;
         }
       case Pmsx003::noData:
