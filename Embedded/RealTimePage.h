@@ -1,4 +1,4 @@
-const String PAGEHTML = R""""(
+const String REALTIMEPAGEHTML = R""""(
 <DOCTYPE html>
 <html>
   <head>
@@ -74,13 +74,7 @@ function onMessage(msg) {
 }
 function onConnect() {
   console.log("connected");
-  mqtt.subscribe("foo");
   mqtt.subscribe("aq");
-  /*
-  message = new Paho.MQTT.Message("Hello World");
-  message.destinationName = "foo";
-  mqtt.send(message);
-  */
 }
 function updateGraph() {
   let d = myGraphs[selected].getFormula();
@@ -110,12 +104,9 @@ function positionLabels() {
   }
 }
 const labels = [
-  "PM1.0, CF=1",
-	"PM2.5, CF=1",
-	"PM10.  CF=1",
-	"PM1.0",
+  "PM1.0",
 	"PM2.5",
-	"PM10.",
+	"PM10",
   "Particles < 0.3 micron",
   "Particles < 0.5 micron",
   "Particles < 1.0 micron",
@@ -131,6 +122,7 @@ function updateSelected() {
 window.addEventListener("load", () => {
   line = document.getElementById("line");
   lineshadow = document.getElementById("shadow");
+
   /* Make the gridlines programatically */
   let gridline = document.getElementById("gridline");
   let gl = "";

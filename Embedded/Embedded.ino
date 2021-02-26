@@ -26,8 +26,10 @@
 
 #include <Arduino.h>
 
-// Include the webpage
-#include "webpage.h"
+// Include the various web pages served up by the web service
+#include "MainWebPage.h"
+#include "DatePage.h"
+#include "RealTimePage.h"
 
 // Library for air quality sensor
 #include <pms.h>
@@ -46,6 +48,9 @@
 // Library for MQTT
 #include <PubSubClient.h>
 
+// Over the air updates
+#include <ArduinoOTA.h>
+
 #define ESP_RX 13
 #define ESP_TX 13
 
@@ -53,15 +58,19 @@
 #define BUTTON_B 16
 #define BUTTON_C  2
 
+// Warning - these values are also hardcoded inside of the HTML pages 
+// in the .h files within this directory.  If important then they can
+// be templatized.
 #define MQTT_SERVER "192.168.50.41"
 #define MQTT_PORT 1883
 
 #define DO_WEBSERVER
+#define USE_MDNS
+
 #ifdef DO_WEBSERVER
 #include <ESP8266WebServer.h>
 #endif
   
-//#define USE_MDNS
 #if defined(USE_MDNS)
 #include <ESP8266mDNS.h>
 #endif
@@ -78,7 +87,8 @@ ESP8266WebServer server(80);
 
 // Approximate number of milliseconds to wait before fetching more
 // air quality readings.
-#define NEXT_READING_MILLIS 2000
+#define NEXT_READING_MILLIS    1000
+#define NEXT_PUBLISHING_MILLIS 10000
 
 PubSubClient mqtt_client;
 Adafruit_SSD1306 display = Adafruit_SSD1306(128, 32, &Wire);
@@ -115,22 +125,26 @@ const char *shortNames[Pmsx003::nValues_PmsDataNames]{
   "Reserved",
 };
 
-void handleRoot();
-void handleNotFound();
 void onFailedConnect(WiFiManager*);
+
+void handleRoot() {
+  server.send(200, "text/html", ROOTPAGEHTML);
+}
+
+void handleDateView() {
+  server.send(200, "text/html", DATEPAGEHTML);
+}
+
+void handleRealTimeView() {
+  server.send(200, "text/html", REALTIMEPAGEHTML);
+}
 
 void setup(void) {
 	Serial.begin(115200);
-	while (!Serial) {};
   
   pinMode(BUTTON_A, INPUT_PULLUP);
-  
-  Serial.println("Starting Air quality sensor...");
-	pms.begin();
-	pms.waitForData(Pmsx003::wakeupTime);
-	pms.write(Pmsx003::cmdModeActive);
-  
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setRotation(2);
   
   // Clear display
   display.clearDisplay();
@@ -155,6 +169,37 @@ void setup(void) {
   }
 #endif
 
+  ArduinoOTA.setHostname("ESP8266-AirQuality");
+  ArduinoOTA.onStart([]() {
+      Serial.println("OTA: Start updating");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nOTA: End");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("OTA Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
+
+  Serial.println("Starting Air quality sensor...");
+	pms.begin();
+	pms.waitForData(Pmsx003::wakeupTime);
+	pms.write(Pmsx003::cmdModeActive);
+  
   display.clearDisplay();
   display.setCursor(0,0);
   display.println("Connected to:");
@@ -163,87 +208,53 @@ void setup(void) {
   display.display();
 
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/message", HTTP_POST, handleMessage);
-  server.onNotFound(handleNotFound);
+  server.on("/realtimeview", HTTP_GET, handleRealTimeView);
+  server.on("/dateview", HTTP_GET, handleDateView);
   server.begin();
+ 
+  connect_mqtt();
 }
 
 void onFailedConnect(WiFiManager *myManager) {
   display.clearDisplay();
   display.setCursor(0,0);
-  display.printf("Unable to connect.  Please configure.\n");
+  display.printf("Configure required\n");
   display.printf("SSID: %s\n", AP_STATION_SSID);
   display.printf("Password: %s\n", AP_STATION_PASSWORD);
   display.display();
 }
 
-bool reconnect_mqtt() {
+void connect_mqtt() {
   mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
   mqtt_client.setClient(WIFI_CLIENT);
   Serial.println("Attempting to connect MQTT");
   mqtt_client.connect("airqualitysensor");
-  delay(500);
   if (!mqtt_client.connected()) {
     Serial.println("Failed to connect MQTT");
-    return false;
+  } else {
+    Serial.println("Connected to MQTT");
   }
-  Serial.println("Connected to MQTT");
-  return true;
 }
 
 bool isWarmup = true;
 long startMillis = millis();
-long lastReadMillis = millis();
+long nextReadMillis = millis();
+long nextMqttPublishMillis = millis();
+long lastMqttPublishMillis = millis();
+long timesRead = 0;
+long timesPublished = 0;
+
 const auto n = Pmsx003::Reserved;
-Pmsx003::pmsData lastData[n];
 
-void loop(void) {
+void potentially_report_pms_data(const Pmsx003::pmsData data[Pmsx003::Reserved]) {
+  if (millis() > nextMqttPublishMillis) { 
+    // Push data to MQTT if we are connected - otherwise attempt to reconnect.
+    if (!mqtt_client.connected()) {
+      connect_mqtt();
+    } else { 
+      char mqttMessage[100];
 
-  if (isWarmup) { 
-    long elapsedMillis = millis() - startMillis;
-    if (elapsedMillis > WARMUP_MILLIS) { 
-      lastReadMillis = millis();
-      isWarmup = false;
-    } 
-    delay(100);
-    return;
-  }
-
-  // From here down we are ensured that we are no longer in the 
-  // warmup state and we can proceed with business as usual.
-
-  long startDataFetchMillis = millis();
-
-	Pmsx003::pmsData data[n];
-	Pmsx003::PmsStatus status = pms.read(data, n);
-
-  long dataFetchedMillis = millis();
-  
-	switch (status) {
-		case Pmsx003::OK:
-		{
-      // Push to display
-      display.clearDisplay();
-      display.setCursor(0,0);
-      display.print(WiFi.localIP());
-      if (mqtt_client.connected()) {
-        display.println(" | OK");
-      } else {
-        display.println(" | BAD");
-      }
-      display.println();
-      display.printf( "%-5d %s\n", data[Pmsx003::PM1dot0CF1], shortNames[Pmsx003::PM1dot0CF1]);
-      display.printf( "%-5d %s\n", data[Pmsx003::PM10dot0CF1], shortNames[Pmsx003::PM10dot0CF1]);
-      display.display();
-      
-      // Copy the data
-      memcpy(lastData, data, sizeof(data[0])*n);
-      
-      // Push MQTT data
-      if (mqtt_client.connected() || reconnect_mqtt()) {
-        char mqttMessage[100];
-        
-        sprintf(mqttMessage, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+      sprintf(mqttMessage, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
           data[Pmsx003::PM1dot0CF1 ],
           data[Pmsx003::PM2dot5CF1],
           data[Pmsx003::PM10dot0CF1],
@@ -253,73 +264,91 @@ void loop(void) {
           data[Pmsx003::Particles2dot5],
           data[Pmsx003::Particles5dot0],
           data[Pmsx003::Particles10],
-          (int) (millis() - lastReadMillis)
+          (int) (millis() - lastMqttPublishMillis)
           );
-          
-        mqtt_client.publish("aq", mqttMessage);
-      }
 
-      long elapsedMillis = millis() - startDataFetchMillis;
-      if (elapsedMillis < NEXT_READING_MILLIS) { 
-#ifdef SHOW_TIME_ELAPSED
-        Serial.printf("Total Elapsed: %d, PMS read: %d, sleeping for: %d\n", 
-          elapsedMillis,
-          (dataFetchedMillis - startDataFetchMillis),
-          (NEXT_READING_MILLIS - elapsedMillis));
-#endif
-        delay(NEXT_READING_MILLIS - elapsedMillis);
-      }
-      lastReadMillis = dataFetchedMillis;
-			break;
-		}
-		case Pmsx003::noData:
-			break;
-		default:
-			Serial.printf("---  PMS Error: %s\n",Pmsx003::errorMsg[status]);
-	};
+      mqtt_client.publish("aq", mqttMessage);
+      timesPublished++;
+      lastMqttPublishMillis = millis();
+    }
+    nextMqttPublishMillis += NEXT_PUBLISHING_MILLIS;
+  }
+}
+
+char getSingleGlyph(int value) { 
+  switch( value % 4) { 
+    case 0: return '-';
+    case 1: return '\\';
+    case 2: return '|';
+    case 3: return '/';
+  }
+  return '?';
+}
+
+void loop(void) {
+
+  ArduinoOTA.handle();
+
+  if (isWarmup) { 
+    long elapsedMillis = millis() - startMillis;
+    if (elapsedMillis > WARMUP_MILLIS) { 
+      isWarmup = false;
+    } 
+    return;
+  }
+
+  // From here down we are ensured that we are no longer in the 
+  // warmup state and we can proceed with business as usual.
+
+  // See if we should fetch data in this loop.
+  
+  long startDataFetchMillis = millis();
+  if (startDataFetchMillis >= nextReadMillis) { 
+
+    Pmsx003::pmsData data[n];
+    Pmsx003::PmsStatus status = pms.read(data, n);
+    timesRead++;
+
+    long dataFetchedMillis = millis();
+
+    switch (status) {
+      case Pmsx003::OK:
+        {
+          // Display the new data on the OLED.
+          display.clearDisplay();
+          display.setCursor(0,0);
+          display.print(WiFi.localIP());
+          if (mqtt_client.connected()) {
+            display.println(" | OK");
+          } else {
+            display.println(" | BAD");
+          }
+        
+          // A single character glyph is useful to show when the data has been
+          // read and also published.  
+          char r = getSingleGlyph(timesRead);
+          char p = getSingleGlyph(timesPublished);
+          display.printf( "             [%c]  [%c]\n", r,p);
+
+          display.printf( "%-5d %s\n", data[Pmsx003::PM1dot0CF1], shortNames[Pmsx003::PM1dot0CF1]);
+          display.printf( "%-5d %s\n", data[Pmsx003::PM10dot0CF1], shortNames[Pmsx003::PM10dot0CF1]);
+          display.display();
+
+          nextReadMillis = millis();
+          long elapsedMillis = millis() - startDataFetchMillis;
+          if (elapsedMillis < NEXT_READING_MILLIS) { 
+            nextReadMillis += (NEXT_READING_MILLIS - elapsedMillis); 
+          }
+          potentially_report_pms_data(data);
+          break;
+        }
+      case Pmsx003::noData:
+        break;
+      default:
+        Serial.printf("---  PMS Error: %s\n",Pmsx003::errorMsg[status]);
+    };
+  }
   server.handleClient();
 }
 
-void handleRoot() {
-  /*
-  String msg = "<!DOCTYPE html><html><head><title>Air Quality Sensor</title><style>table,th,td{border:1px solid black;border-collapse:collapse;}</style></head><body><table>";
-  for (size_t i = Pmsx003::PM1dot0CF1; i <= Pmsx003::Particles10; ++i) {
-    msg = msg + "<tr><td>" + String(lastData[i]) + "</td><td>" + String(Pmsx003::dataNames[i]) + "</td><td>" + String(Pmsx003::metrics[i]) + "</td></tr>";
-  }
-  msg = msg + "</table>";
-  //msg = msg + "<br /><form action=\"/message\" method=\"POST\"><input type=\"text\" name=\"msg\"><input type=\"submit\" value=\"Submit\"></form>";
-  msg = msg + "<script>setTimeout(()=>{window.location.replace(\"/\");}, 5000);</script>";
-  msg = msg + "</body></html>";
-  server.send(200, "text/html", msg);
-  */
-
-  server.send(200, "text/html", PAGEHTML);
-}
-
-void handleMessage() {
-  Serial.println("Got message request");
-  String msg = server.arg("msg");
-  Serial.print("Got message: \"");
-  Serial.print(msg);
-  Serial.println("\"");
-  
-  // Display the message given to us.
-  // Clear display first
-  display.clearDisplay();
-  display.setCursor(0,0);
-  // Now write the message all in one go.
-  // The message may be cut off.
-  display.print(msg);
-  display.display();
-  
-  // Redirect back to the main page.
-  server.sendHeader("Location","/");
-  server.send(303);
-}
-
-// Send HTTP status 404 (Not Found) when there's no handler for the URI in the
-// request
-void handleNotFound(){
-  server.send(404, "text/plain", "404: Not found"); 
-}
 
