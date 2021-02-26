@@ -87,7 +87,7 @@ ESP8266WebServer server(80);
 
 // Approximate number of milliseconds to wait before fetching more
 // air quality readings.
-#define NEXT_READING_MILLIS    1000
+#define NEXT_READING_MILLIS    500
 #define NEXT_PUBLISHING_MILLIS 10000
 
 PubSubClient mqtt_client;
@@ -307,13 +307,14 @@ void loop(void) {
 
     Pmsx003::pmsData data[n];
     Pmsx003::PmsStatus status = pms.read(data, n);
-    timesRead++;
 
     long dataFetchedMillis = millis();
 
     switch (status) {
       case Pmsx003::OK:
         {
+          timesRead++;
+
           // Display the new data on the OLED.
           display.clearDisplay();
           display.setCursor(0,0);
